@@ -1,0 +1,40 @@
+services:
+  manyporter:
+    build: .
+    env_file: ".env"
+    volumes:
+    - ./ChatExport_2026-03-31:/app/ChatExport_2026-03-31
+    - ./migrations:/app/migrations
+    networks:
+      - mp
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+
+  db:
+    image: postgres
+    restart: unless-stopped
+    volumes:
+      - db:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${PG_USERNAME}
+      - POSTGRES_PASSWORD=${PG_PASSWORD}
+      - POSTGRES_DB=${PG_DATABASE}
+      - POSTGRES_PORT=${PG_PORT}
+    ports:
+      - ${PG_PORT}:${PG_PORT}
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mp
+
+networks:
+  mp:
+    driver: bridge
+
+volumes:
+  db:
