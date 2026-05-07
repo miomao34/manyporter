@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/charmbracelet/log v1.0.0
+	github.com/go-telegram/bot v1.20.0
 	github.com/jackc/pgx/v5 v5.9.2
 )
 
