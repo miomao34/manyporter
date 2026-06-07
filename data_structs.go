@@ -37,9 +37,16 @@ type Export struct {
 }
 
 type Controller struct {
+	conn  *pgx.Conn
+	bot   *bot.Bot
+	state int
+}
+
+// used for controller.state
+const NullState int = -1
+
+type Importer struct {
 	conn             *pgx.Conn
-	vars             Vars
-	bot              *bot.Bot
 	groupPrevMessage *Message
 	rootID           int
 }

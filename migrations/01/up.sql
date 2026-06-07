@@ -41,3 +41,17 @@ CREATE TABLE IF NOT EXISTS files (
 	media_type TEXT,
 	mime_type TEXT
 );
+
+CREATE TABLE IF NOT EXISTS tags_list (
+	id SERIAL NOT NULL PRIMARY KEY,
+	name TEXT UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+	id SERIAL NOT NULL PRIMARY KEY,
+	message_id INTEGER,
+	tag_id INTEGER,
+	FOREIGN KEY(message_id) REFERENCES messages(id),
+	FOREIGN KEY(tag_id) REFERENCES tags_list(id),
+	UNIQUE (message_id, tag_id)
+);

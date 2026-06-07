@@ -13,5 +13,13 @@ up:
 down:
 	docker compose down
 
+build:
+	go build .
+
+send:
+	docker build .
+	docker save manyporter-manyporter:latest -o manyporter.docker
+	rsync manyporter.docker cyan:/app
+
 run:
 	go run .

@@ -1,11 +1,10 @@
 services:
-  manyporter:
+  bot:
     build: .
     env_file: ".env"
     volumes:
     - ./ChatExport_2026-03-31:/app/ChatExport_2026-03-31
     - ./migrations:/app/migrations
-    - ./simon-stalenhag-02.jpg:/app/simon-stalenhag-02.jpg
     networks:
       - mp
     depends_on:

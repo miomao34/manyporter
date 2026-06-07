@@ -39,15 +39,15 @@ func (c *Controller) ApplyMigrations() error {
 // the photos, files and text entities are all attached to messages.
 // messages can have parent messages - this allows to implement telegram grouping
 // not ideal, but eh
-func (c *Controller) InsertMessage(m Message) (int, error) {
-	tx, err := c.conn.Begin(context.Background())
+func (im *Importer) InsertMessage(m Message) (int, error) {
+	tx, err := im.conn.Begin(context.Background())
 	if err != nil {
 		return 0, err
 	}
 
-	isMergeable := arePhotoMessagesMergeable(c.groupPrevMessage, &m)
+	isMergeable := arePhotoMessagesMergeable(im.groupPrevMessage, &m)
 	if !isMergeable {
-		c.groupPrevMessage = &m
+		im.groupPrevMessage = &m
 	}
 
 	var result pgx.Row
@@ -98,7 +98,7 @@ func (c *Controller) InsertMessage(m Message) (int, error) {
 			m.ForwardedFrom,
 			m.ForwardedFromID,
 			m.SourceFolderID,
-			c.rootID,
+			im.rootID,
 		)
 	}
 	var messageID int
@@ -109,7 +109,7 @@ func (c *Controller) InsertMessage(m Message) (int, error) {
 	}
 
 	if !isMergeable {
-		c.rootID = messageID
+		im.rootID = messageID
 	}
 
 	if len(m.TextEntities) != 0 {
@@ -170,7 +170,7 @@ func (c *Controller) InsertMessage(m Message) (int, error) {
 	}
 
 	if isMergeable {
-		c.groupPrevMessage = &m
+		im.groupPrevMessage = &m
 	}
 
 	err = tx.Commit(context.Background())
@@ -311,7 +311,7 @@ func (c *Controller) GetOneUnresolvedMessage() (*Message, error) {
 		LEFT JOIN files ON messages.id = files.message_id
 		LEFT JOIN source_folders ON messages.source_id = source_folders.id
 		WHERE resolution = $1
-		ORDER BY id
+		ORDER BY messages.id
 		LIMIT 1;`,
 		MessageUnprocessed,
 	)
@@ -396,6 +396,30 @@ func (c *Controller) GetMessageEntities(id int) ([]TextEntity, error) {
 		textEntities = append(textEntities, te)
 	}
 	return textEntities, nil
+}
+
+func (c *Controller) TagMessage(messageID int, tagName string) error {
+	// log.Debug("trying to apply a tag", "tag_name", tag_name)
+	tx, err := c.conn.Begin(context.Background())
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(context.Background(),
+		`INSERT INTO tags_list (name)
+	VALUES ($1)
+	ON CONFLICT DO NOTHING;`, tagName)
+
+	row := tx.QueryRow(context.Background(),
+		`SELECT id FROM tags_list WHERE name = $1;`, tagName)
+	var tagID int
+	row.Scan(&tagID)
+
+	_, err = tx.Exec(context.Background(), "INSERT INTO tags (message_id, tag_id) VALUES ($1, $2);", messageID, tagID)
+
+	err = tx.Commit(context.Background())
+
+	return err
 }
 
 // in telegram, every message contains at most 1 photo or file,

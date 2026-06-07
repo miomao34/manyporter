@@ -14,8 +14,19 @@ type Vars struct {
 	hostname string
 
 	tgApiKey string
-	tgUserID int
+	tgUserID int64
 }
+
+var (
+	username string = getEnvVarWithPanic("PG_USERNAME")
+	password string = getEnvVarWithPanic("PG_PASSWORD")
+	database string = getEnvVarWithPanic("PG_DATABASE")
+	port     string = getEnvVarWithPanic("PG_PORT")
+	hostname string = getEnvVarWithPanic("PG_HOSTNAME")
+
+	tgApiKey string = getEnvVarWithPanic("TELEGRAM_BOT_TOKEN")
+	tgUserID int64
+)
 
 func getEnvVarWithPanic(envVar string) string {
 	result, ok := os.LookupEnv(envVar)
@@ -25,21 +36,14 @@ func getEnvVarWithPanic(envVar string) string {
 	return result
 }
 
-func InitVars() Vars {
-	vars := Vars{}
-
-	vars.username = getEnvVarWithPanic("PG_USERNAME")
-	vars.password = getEnvVarWithPanic("PG_PASSWORD")
-	vars.database = getEnvVarWithPanic("PG_DATABASE")
-	vars.port = getEnvVarWithPanic("PG_PORT")
-	vars.hostname = getEnvVarWithPanic("PG_HOSTNAME")
-
-	vars.tgApiKey = getEnvVarWithPanic("TELEGRAM_BOT_TOKEN")
+func InitTgUserID() error {
+	rawVar := getEnvVarWithPanic("TELEGRAM_USER_ID")
 	var err error
-	vars.tgUserID, err = strconv.Atoi(getEnvVarWithPanic("TELEGRAM_USER_ID"))
+	var tgUserIDInt int
+	tgUserIDInt, err = strconv.Atoi(rawVar)
 	if err != nil {
-		panic("telegram id is not an int")
+		return err
 	}
-
-	return vars
+	tgUserID = int64(tgUserIDInt)
+	return nil
 }

@@ -22,9 +22,10 @@ func (c *Controller) Import(rootPath string) error {
 		return err
 	}
 
+	im := Importer{conn: c.conn}
 	for _, message := range export.Messages {
 		message.SourceFolderID = sourceID
-		c.InsertMessage(message)
+		im.InsertMessage(message)
 	}
 	return nil
 }

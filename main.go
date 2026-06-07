@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -19,9 +20,14 @@ import (
 
 func main() {
 	log.SetLevel(log.DebugLevel)
+
+	err := InitTgUserID()
+	if err != nil {
+		panic("TELEGRAM_BOT_TOKEN is not int")
+	}
+
 	// urlExample := "postgres://username:password@localhost:5432/database_name"
-	vars := InitVars()
-	dbURL := fmt.Sprintf("postgres://%v:%v@%v:%v/%v", vars.username, vars.password, vars.hostname, vars.port, vars.database)
+	dbURL := fmt.Sprintf("postgres://%v:%v@%v:%v/%v", username, password, hostname, port, database)
 
 	dbCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -33,7 +39,7 @@ func main() {
 	}
 	defer conn.Close(dbCtx)
 
-	controller := Controller{conn: conn, vars: vars}
+	controller := Controller{conn: conn, state: NullState}
 
 	err = controller.ApplyMigrations()
 	if err != nil {
@@ -49,10 +55,10 @@ func main() {
 
 		bot.WithCallbackQueryDataHandler("button_", bot.MatchTypePrefix, getCallbackHandler(&controller)),
 
-		bot.WithDefaultHandler(getHandler(&controller)),
+		bot.WithDefaultHandler(getDefaultHandler(&controller)),
 	}
 
-	controller.bot, err = bot.New(controller.vars.tgApiKey, opts...)
+	controller.bot, err = bot.New(tgApiKey, opts...)
 	if err != nil {
 		panic(err)
 	}
@@ -62,9 +68,39 @@ func main() {
 	controller.bot.Start(ctx)
 }
 
-func getHandler(c *Controller) func(context.Context, *bot.Bot, *models.Update) {
+func getDefaultHandler(c *Controller) func(context.Context, *bot.Bot, *models.Update) {
 	handler := func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		if update.Message.Chat.ID != tgUserID {
+			return
+		}
 
+		databaseID := c.state
+		if databaseID == NullState {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: tgUserID,
+				Text:   "hwuh? ",
+			})
+			return
+		}
+
+		tags := make([]string, 0)
+		for line := range strings.SplitSeq(update.Message.Text, "\n") {
+			line = strings.ToLower(line)
+			tag := clearString(line)
+			tags = append(tags, tag)
+		}
+
+		for _, tag := range tags {
+			err := c.TagMessage(databaseID, tag)
+			if err != nil {
+				log.Error("failed to tag message", "err", err)
+			}
+		}
+
+		c.MarkMessageByID(databaseID, MessageSaved)
+
+		c.SendNext(ctx)
+		c.state = NullState
 	}
 
 	return handler
@@ -72,12 +108,16 @@ func getHandler(c *Controller) func(context.Context, *bot.Bot, *models.Update) {
 
 func getImportHandler(c *Controller) func(context.Context, *bot.Bot, *models.Update) {
 	handler := func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		if update.Message.Chat.ID != tgUserID {
+			return
+		}
+
 		lenOfImportCommand := 7
 		argument := strings.TrimSpace(update.Message.Text[lenOfImportCommand:])
 
 		log.Info("trying to import", "argument", argument)
 		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: c.vars.tgUserID,
+			ChatID: tgUserID,
 			Text:   fmt.Sprintf("trying to import \"%v\"", argument),
 		})
 
@@ -85,12 +125,12 @@ func getImportHandler(c *Controller) func(context.Context, *bot.Bot, *models.Upd
 		if err != nil {
 			log.Error("failed to import", "argument", argument, "err", err)
 			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: c.vars.tgUserID,
+				ChatID: tgUserID,
 				Text:   fmt.Sprintf("failed to import \"%v\" - %v", argument, err),
 			})
 		} else {
 			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: c.vars.tgUserID,
+				ChatID: tgUserID,
 				Text:   "import success!",
 			})
 
@@ -101,6 +141,9 @@ func getImportHandler(c *Controller) func(context.Context, *bot.Bot, *models.Upd
 
 func getNextHandler(c *Controller) func(context.Context, *bot.Bot, *models.Update) {
 	handler := func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		if update.Message.Chat.ID != tgUserID {
+			return
+		}
 		c.SendNext(context.Background())
 	}
 	return handler
@@ -122,17 +165,24 @@ func getCallbackHandler(c *Controller) func(context.Context, *bot.Bot, *models.U
 			log.Error("mangled callback message", "CallbackQuery.Data", update.CallbackQuery.Data)
 			return
 		}
+		// action identifier, 4 letters
 		switch update.CallbackQuery.Data[7:11] {
 		case "disc":
 			c.MarkMessageByID(databaseID, MessageDiscarded)
+			c.SendNext(ctx)
 		case "save":
-			c.MarkMessageByID(databaseID, MessageSaved)
+			c.bot.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: tgUserID,
+				Text:   "send tags, one per line:",
+			})
+			c.state = databaseID
+			// c.MarkMessageByID(databaseID, MessageSaved)
 		case "post":
 			c.MarkMessageByID(databaseID, MessagePostponed)
+			c.SendNext(ctx)
 		default:
 			log.Error("mangled callback message", "CallbackQuery.Data", update.CallbackQuery.Data)
 		}
-		c.SendNext(ctx)
 
 	}
 
@@ -144,7 +194,7 @@ func (c *Controller) SendNext(ctx context.Context) {
 	if err != nil {
 		log.Error("failed to get the next unresolved message", "err", err)
 		c.bot.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: c.vars.tgUserID,
+			ChatID: tgUserID,
 			Text:   "failed to get the next unresolved message; err: " + err.Error(),
 		})
 		return
@@ -160,7 +210,7 @@ func (c *Controller) SendNext(ctx context.Context) {
 	}
 	time := time.Unix(m.DateUnixtime, 0)
 	c.bot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: c.vars.tgUserID,
+		ChatID: tgUserID,
 		Text:   fmt.Sprintf("no. %v: %v\n%v", m.ID, time, metaText),
 	})
 
@@ -179,12 +229,7 @@ func (c *Controller) SendNext(ctx context.Context) {
 
 	// reconstructing message
 	messageEntities := GenerateMessageEntities(m.TextEntities)
-	var builder strings.Builder
-	for _, entity := range m.TextEntities {
-		builder.WriteString(entity.Text)
-	}
-	text := builder.String()
-	log.Debug("resulting text: " + text)
+	text := GenerateMessageString(m.TextEntities)
 
 	if m.Photo != "" {
 		fileData, errReadFile := os.ReadFile(m.SourceFolder + string(os.PathSeparator) + m.Photo)
@@ -193,7 +238,7 @@ func (c *Controller) SendNext(ctx context.Context) {
 			return
 		}
 		params := &bot.SendPhotoParams{
-			ChatID:          c.vars.tgUserID,
+			ChatID:          tgUserID,
 			Photo:           &models.InputFileUpload{Filename: m.Photo, Data: bytes.NewReader(fileData)},
 			Caption:         text,
 			CaptionEntities: messageEntities,
@@ -213,7 +258,7 @@ func (c *Controller) SendNext(ctx context.Context) {
 			return
 		}
 		params := &bot.SendDocumentParams{
-			ChatID:          c.vars.tgUserID,
+			ChatID:          tgUserID,
 			Document:        &models.InputFileUpload{Filename: m.File, Data: bytes.NewReader(fileData)},
 			Caption:         m.File,
 			CaptionEntities: messageEntities,
@@ -224,7 +269,7 @@ func (c *Controller) SendNext(ctx context.Context) {
 	}
 
 	_, err = c.bot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      c.vars.tgUserID,
+		ChatID:      tgUserID,
 		Text:        text,
 		Entities:    messageEntities,
 		ReplyMarkup: kb,
@@ -238,6 +283,7 @@ func GenerateMessageEntities(textEntities []TextEntity) []models.MessageEntity {
 
 	for _, entity := range textEntities {
 		addMessageEntity := true
+		// this, instead of len(), accounts for emoji and non-english text
 		length := utf8.RuneCountInString(entity.Text)
 
 		switch entity.Type {
@@ -245,6 +291,7 @@ func GenerateMessageEntities(textEntities []TextEntity) []models.MessageEntity {
 			// do nothing
 			addMessageEntity = false
 		case "link":
+			// in json, it's called link, but in tg it's called url
 			entity.Type = "url"
 		}
 
@@ -262,4 +309,18 @@ func GenerateMessageEntities(textEntities []TextEntity) []models.MessageEntity {
 	}
 
 	return result
+}
+
+func GenerateMessageString(textEntities []TextEntity) string {
+	var builder strings.Builder
+	for _, entity := range textEntities {
+		builder.WriteString(entity.Text)
+	}
+	return builder.String()
+}
+
+var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9 ]+`)
+
+func clearString(str string) string {
+	return nonAlphanumericRegex.ReplaceAllString(str, "")
 }
